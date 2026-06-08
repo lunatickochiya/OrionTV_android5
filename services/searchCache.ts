@@ -158,10 +158,9 @@ class SearchCache {
    * Generate cache key from query using hash to prevent collisions
    */
   private generateCacheKey(query: string): string {
-    const normalized = query.toLowerCase().trim();
     const hash = this.hashQuery(query);
-    // Include both hash and query string to prevent collisions
-    return `${CACHE_KEY_PREFIX}${hash}_${normalized}`;
+    // Use only hash for safe storage key (avoids special character issues)
+    return `${CACHE_KEY_PREFIX}${hash}`;
   }
 
   /**

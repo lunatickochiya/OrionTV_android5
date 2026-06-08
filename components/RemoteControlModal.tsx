@@ -17,6 +17,8 @@ export const RemoteControlModal: React.FC = () => {
     if (isModalVisible && !isServerRunning && !serverUrl && !error) {
       startServer();
     }
+    // startServer is a stable reference from Zustand, but including for React Hook strictness
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isModalVisible, isServerRunning, serverUrl, error]);
 
   return (

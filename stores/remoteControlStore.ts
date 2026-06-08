@@ -7,6 +7,12 @@ const logger = Logger.withTag('RemoteControlStore');
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 2000;
 
+/**
+ * Sleep utility function for delaying async operations
+ */
+const sleep = (ms: number): Promise<void> => 
+  new Promise(resolve => setTimeout(resolve, ms));
+
 interface RemoteControlState {
   isServerRunning: boolean;
   serverUrl: string | null;
@@ -70,8 +76,8 @@ export const useRemoteControlStore = create<RemoteControlState>((set, get) => {
           logger.warn(`Server start failed, retrying (${newRetryCount}/${MAX_RETRY_ATTEMPTS})...`);
           set({ retryCount: newRetryCount, isInitializing: false });
           
-          // Wait before retrying
-          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+          // Wait before retrying to space out retry attempts
+          await sleep(RETRY_DELAY_MS);
           
           // Retry with isRetry flag to avoid state conflicts
           await performServerStart(true);
