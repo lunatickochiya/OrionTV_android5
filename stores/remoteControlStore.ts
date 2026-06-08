@@ -4,10 +4,15 @@ import Logger from '@/utils/Logger';
 
 const logger = Logger.withTag('RemoteControlStore');
 
+const MAX_RETRY_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 2000;
+
 interface RemoteControlState {
   isServerRunning: boolean;
   serverUrl: string | null;
   error: string | null;
+  retryCount: number;
+  isInitializing: boolean;
   startServer: () => Promise<void>;
   stopServer: () => void;
   isModalVisible: boolean;
@@ -17,20 +22,26 @@ interface RemoteControlState {
   targetPage: string | null;
   setMessage: (message: string, targetPage?: string) => void;
   clearMessage: () => void;
+  resetError: () => void;
 }
 
 export const useRemoteControlStore = create<RemoteControlState>((set, get) => ({
   isServerRunning: false,
   serverUrl: null,
   error: null,
+  retryCount: 0,
+  isInitializing: false,
   isModalVisible: false,
   lastMessage: null,
   targetPage: null,
 
   startServer: async () => {
-    if (get().isServerRunning) {
+    const currentState = get();
+    if (currentState.isServerRunning || currentState.isInitializing) {
       return;
     }
+    
+    set({ isInitializing: true, error: null });
     
     try {
       remoteControlService.init({
@@ -57,16 +68,30 @@ export const useRemoteControlStore = create<RemoteControlState>((set, get) => ({
       try {
         const url = await remoteControlService.startServer();
         logger.info('Server started, URL:', url);
-        set({ isServerRunning: true, serverUrl: url, error: null });
+        set({ isServerRunning: true, serverUrl: url, error: null, retryCount: 0, isInitializing: false });
       } catch (serverError) {
-        const errorMessage = '启动失败，请检查网络连接后重试。';
-        logger.error('Failed to start server:', serverError);
-        set({ error: errorMessage, isServerRunning: false });
+        const state = get();
+        if (state.retryCount < MAX_RETRY_ATTEMPTS) {
+          const newRetryCount = state.retryCount + 1;
+          logger.warn(`Server start failed, retrying (${newRetryCount}/${MAX_RETRY_ATTEMPTS})...`);
+          set({ retryCount: newRetryCount, isInitializing: false });
+          
+          // Wait before retrying
+          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+          
+          // Retry
+          const { startServer } = get();
+          startServer();
+        } else {
+          const errorMessage = '启动失败，请检查网络连接后重试。';
+          logger.error('Failed to start server after retries:', serverError);
+          set({ error: errorMessage, isServerRunning: false, isInitializing: false });
+        }
       }
     } catch (error) {
       const errorMessage = '启动失败，请强制退应用后重试。';
       logger.error('Unexpected error in startServer:', error);
-      set({ error: errorMessage, isServerRunning: false });
+      set({ error: errorMessage, isServerRunning: false, isInitializing: false });
     }
   },
 
@@ -74,18 +99,18 @@ export const useRemoteControlStore = create<RemoteControlState>((set, get) => ({
     try {
       if (get().isServerRunning) {
         remoteControlService.stopServer();
-        set({ isServerRunning: false, serverUrl: null });
+        set({ isServerRunning: false, serverUrl: null, retryCount: 0 });
       }
     } catch (error) {
       logger.error('Error stopping server:', error);
       // 即使出错也更新状态
-      set({ isServerRunning: false, serverUrl: null });
+      set({ isServerRunning: false, serverUrl: null, retryCount: 0 });
     }
   },
 
   showModal: (targetPage?: string) => {
     try {
-      set({ isModalVisible: true, targetPage });
+      set({ isModalVisible: true, targetPage, retryCount: 0, error: null });
     } catch (e) {
       logger.error('Error showing modal:', e);
     }
@@ -112,6 +137,14 @@ export const useRemoteControlStore = create<RemoteControlState>((set, get) => ({
       set({ lastMessage: null, targetPage: null });
     } catch (e) {
       logger.error('Error clearing message:', e);
+    }
+  },
+
+  resetError: () => {
+    try {
+      set({ error: null, retryCount: 0 });
+    } catch (e) {
+      logger.error('Error resetting error:', e);
     }
   },
 }));

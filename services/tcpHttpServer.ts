@@ -170,7 +170,7 @@ class TCPHttpServer {
       
       if (netState.isConnected === false) {
         logger.warn('[TCPHttpServer] Device is not connected to any network');
-        return null;
+        throw new Error('设备未连接到任何网络。请连接WiFi或移动网络后重试。');
       }
 
       // 优先从details中获取IP地址
@@ -186,14 +186,18 @@ class TCPHttpServer {
         logger.warn('[TCPHttpServer] Connected via', netState.type, 'but no IP found, attempting fallback');
         // 对于Android TV，可能需要使用特定的网络接口查询
         // 这里返回null以触发错误处理，让用户知道存在问题
-        return null;
+        throw new Error(`已连接到${netState.type}，但无法获取IP地址。请检查网络设置。`);
       }
 
       logger.warn('[TCPHttpServer] Unsupported network type:', netState.type);
-      return null;
+      throw new Error(`不支持的网络类型: ${netState.type}。请使用WiFi连接。`);
     } catch (error) {
+      if (error instanceof Error) {
+        logger.error('[TCPHttpServer] Error getting IP address:', error.message);
+        throw error;
+      }
       logger.error('[TCPHttpServer] Error getting IP address:', error);
-      return null;
+      throw new Error('无法获取设备IP地址。请检查网络连接。');
     }
   }
 
@@ -204,12 +208,6 @@ class TCPHttpServer {
   public async start(): Promise<string> {
     try {
       const ipAddress = await this.getLocalIPAddress();
-      
-      if (!ipAddress) {
-        const errorMsg = '无法获取设备IP地址。请确保：\n1. 设备已连接到WiFi或网络\n2. 网络连接正常\n3. 如使用Android TV，请检查网络设置';
-        logger.error('[TCPHttpServer]', errorMsg);
-        throw new Error(errorMsg);
-      }
 
       if (this.isRunning) {
         logger.debug('[TCPHttpServer] Server is already running.');

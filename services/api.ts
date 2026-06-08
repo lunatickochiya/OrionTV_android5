@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { searchCache } from "./searchCache";
 
 // region: --- Interface Definitions ---
 export interface DoubanItem {
@@ -233,9 +234,23 @@ export class API {
   }
 
   async searchVideos(query: string): Promise<{ results: SearchResult[] }> {
+    // Check cache first
+    const cachedResults = await searchCache.get(query);
+    if (cachedResults) {
+      return { results: cachedResults };
+    }
+
+    // Fetch from API if not cached
     const url = `/api/search?q=${encodeURIComponent(query)}`;
     const response = await this._fetch(url);
-    return response.json();
+    const data = await response.json();
+
+    // Cache the results
+    if (data.results && Array.isArray(data.results)) {
+      await searchCache.set(query, data.results);
+    }
+
+    return data;
   }
 
   async searchVideo(query: string, resourceId: string, signal?: AbortSignal): Promise<{ results: SearchResult[] }> {
