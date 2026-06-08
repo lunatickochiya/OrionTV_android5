@@ -25,23 +25,17 @@ interface RemoteControlState {
   resetError: () => void;
 }
 
-export const useRemoteControlStore = create<RemoteControlState>((set, get) => ({
-  isServerRunning: false,
-  serverUrl: null,
-  error: null,
-  retryCount: 0,
-  isInitializing: false,
-  isModalVisible: false,
-  lastMessage: null,
-  targetPage: null,
-
-  startServer: async () => {
+export const useRemoteControlStore = create<RemoteControlState>((set, get) => {
+  // Helper function to perform the actual server start logic
+  const performServerStart = async (isRetry: boolean = false): Promise<void> => {
     const currentState = get();
-    if (currentState.isServerRunning || currentState.isInitializing) {
+    if (!isRetry && (currentState.isServerRunning || currentState.isInitializing)) {
       return;
     }
     
-    set({ isInitializing: true, error: null });
+    if (!isRetry) {
+      set({ isInitializing: true, error: null });
+    }
     
     try {
       remoteControlService.init({
@@ -66,7 +60,7 @@ export const useRemoteControlStore = create<RemoteControlState>((set, get) => ({
       });
 
       try {
-         const url = await remoteControlService.startServer();
+        const url = await remoteControlService.startServer();
         logger.info('Server started, URL:', url);
         set({ isServerRunning: true, serverUrl: url, error: null, retryCount: 0, isInitializing: false });
       } catch (serverError) {
@@ -79,8 +73,8 @@ export const useRemoteControlStore = create<RemoteControlState>((set, get) => ({
           // Wait before retrying
           await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
           
-          // Retry sequentially with await
-          await get().startServer();
+          // Retry with isRetry flag to avoid state conflicts
+          await performServerStart(true);
         } else {
           const errorMessage = '启动失败，请检查网络连接后重试。';
           logger.error('Failed to start server after retries:', serverError);
@@ -92,9 +86,23 @@ export const useRemoteControlStore = create<RemoteControlState>((set, get) => ({
       logger.error('Unexpected error in startServer:', error);
       set({ error: errorMessage, isServerRunning: false, isInitializing: false });
     }
-  },
+  };
 
-  stopServer: () => {
+  return {
+    isServerRunning: false,
+    serverUrl: null,
+    error: null,
+    retryCount: 0,
+    isInitializing: false,
+    isModalVisible: false,
+    lastMessage: null,
+    targetPage: null,
+
+    startServer: async () => {
+      await performServerStart(false);
+    },
+
+    stopServer: () => {
     try {
       if (get().isServerRunning) {
         remoteControlService.stopServer();
@@ -146,4 +154,5 @@ export const useRemoteControlStore = create<RemoteControlState>((set, get) => ({
       logger.error('Error resetting error:', e);
     }
   },
-}));
+  };
+});

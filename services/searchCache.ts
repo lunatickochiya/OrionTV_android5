@@ -102,8 +102,11 @@ class SearchCache {
       // Store in persistent storage
       await AsyncStorage.setItem(cacheKey, JSON.stringify(entry));
 
-      // Clean up old entries if cache is too large
-      await this.cleanupOldEntries();
+      // Check if cleanup is needed (only run cleanup when significantly over limit)
+      const stats = await this.getStats();
+      if (stats.storageCacheSize > MAX_CACHE_ENTRIES + 10) {
+        await this.cleanupOldEntries();
+      }
 
       logger.debug(`Cached search results for query: "${query}"`);
     } catch (error) {
@@ -155,8 +158,10 @@ class SearchCache {
    * Generate cache key from query using hash to prevent collisions
    */
   private generateCacheKey(query: string): string {
+    const normalized = query.toLowerCase().trim();
     const hash = this.hashQuery(query);
-    return `${CACHE_KEY_PREFIX}${hash}`;
+    // Include both hash and query string to prevent collisions
+    return `${CACHE_KEY_PREFIX}${hash}_${normalized}`;
   }
 
   /**

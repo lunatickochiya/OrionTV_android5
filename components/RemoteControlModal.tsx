@@ -17,7 +17,7 @@ export const RemoteControlModal: React.FC = () => {
     if (isModalVisible && !isServerRunning && !serverUrl && !error) {
       startServer();
     }
-  }, [isModalVisible, isServerRunning, serverUrl, error, startServer]);
+  }, [isModalVisible, isServerRunning, serverUrl, error]);
 
   return (
     <Modal animationType="fade" transparent={true} visible={isModalVisible} onRequestClose={hideModal}>
@@ -156,6 +156,5 @@ const styles = StyleSheet.create({
   },
   closeButtonWithRetry: {
     flex: 1,
-    marginLeft: 8,
   },
 });
