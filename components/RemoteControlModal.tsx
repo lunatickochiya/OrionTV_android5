@@ -12,14 +12,16 @@ export const RemoteControlModal: React.FC = () => {
   const backgroundColor = useThemeColor({}, "background");
   const textColor = useThemeColor({}, "text");
 
-  // Start server when modal is shown
+  // Start server when modal is shown, unless one is already running
   useEffect(() => {
-    if (isModalVisible && !isServerRunning && !serverUrl && !error) {
+    // Note: startServer is a function from Zustand store (stable reference)
+    // We omit it from dependencies to prevent unnecessary re-triggers
+    // Instead, we rely on the individual state flags to determine when to start
+    if (isModalVisible && !isServerRunning) {
       startServer();
     }
-    // startServer is a stable reference from Zustand, but including for React Hook strictness
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isModalVisible, isServerRunning, serverUrl, error]);
+  }, [isModalVisible, isServerRunning]);
 
   return (
     <Modal animationType="fade" transparent={true} visible={isModalVisible} onRequestClose={hideModal}>

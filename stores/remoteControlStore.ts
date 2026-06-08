@@ -123,7 +123,8 @@ export const useRemoteControlStore = create<RemoteControlState>((set, get) => {
 
   showModal: (targetPage?: string) => {
     try {
-      set({ isModalVisible: true, targetPage, retryCount: 0, error: null });
+      // Don't clear error on showModal - let it persist to show retry option
+      set({ isModalVisible: true, targetPage, retryCount: 0 });
     } catch (e) {
       logger.error('Error showing modal:', e);
     }

@@ -24,13 +24,16 @@ interface CacheEntry {
 const CACHE_KEY_PREFIX = 'search_cache_';
 const CACHE_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MAX_CACHE_ENTRIES = 50;
+// Cleanup is deferred until cache exceeds max by this amount to reduce overhead
+const CLEANUP_THRESHOLD_BUFFER = 10;
 
 class SearchCache {
   private memoryCache: Map<string, CacheEntry> = new Map();
 
   /**
    * Simple hash function for cache key generation
-   * Uses a basic approach suitable for the query length we expect
+   * Uses a DJB2-like algorithm suitable for generating collision-resistant cache keys
+   * This approach is fast, deterministic, and sufficient for cache key purposes
    */
   private hashQuery(query: string): string {
     let hash = 0;
@@ -104,7 +107,7 @@ class SearchCache {
 
       // Check if cleanup is needed (only run cleanup when significantly over limit)
       const stats = await this.getStats();
-      if (stats.storageCacheSize > MAX_CACHE_ENTRIES + 10) {
+      if (stats.storageCacheSize > MAX_CACHE_ENTRIES + CLEANUP_THRESHOLD_BUFFER) {
         await this.cleanupOldEntries();
       }
 
