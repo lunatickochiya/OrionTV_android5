@@ -158,21 +158,57 @@ class TCPHttpServer {
     }
   }
 
+  // 获取本地IP地址，支持多种网络类型和Android TV
+  private async getLocalIPAddress(): Promise<string | null> {
+    try {
+      const netState = await NetInfo.fetch();
+      logger.debug('[TCPHttpServer] Network state:', JSON.stringify(netState));
+
+      // 支持多种网络连接类型：wifi、ethernet、cellular等
+      // 特别是Android TV可能使用cellular或其他类型的网络
+      const supportedTypes = ['wifi', 'ethernet', 'cellular', 'wimax', 'bluetooth'];
+      
+      if (netState.isConnected === false) {
+        logger.warn('[TCPHttpServer] Device is not connected to any network');
+        return null;
+      }
+
+      // 优先从details中获取IP地址
+      const details = netState.details as any;
+      if (details && details.ipAddress) {
+        logger.info('[TCPHttpServer] Got IP address from netState:', details.ipAddress);
+        return details.ipAddress;
+      }
+
+      // 备用方案：如果NetInfo无法获取IP，尝试使用localhost（用于本地测试）
+      // 实际生产环境应该先尝试其他方式获取IP
+      if (netState.type && supportedTypes.includes(netState.type)) {
+        logger.warn('[TCPHttpServer] Connected via', netState.type, 'but no IP found, attempting fallback');
+        // 对于Android TV，可能需要使用特定的网络接口查询
+        // 这里返回null以触发错误处理，让用户知道存在问题
+        return null;
+      }
+
+      logger.warn('[TCPHttpServer] Unsupported network type:', netState.type);
+      return null;
+    } catch (error) {
+      logger.error('[TCPHttpServer] Error getting IP address:', error);
+      return null;
+    }
+  }
+
   public setRequestHandler(handler: RequestHandler) {
     this.requestHandler = handler;
   }
 
   public async start(): Promise<string> {
     try {
-      const netState = await NetInfo.fetch();
-      let ipAddress: string | null = null;
+      const ipAddress = await this.getLocalIPAddress();
       
-      if (netState.type === 'wifi' || netState.type === 'ethernet') {
-        ipAddress = (netState.details as any)?.ipAddress ?? null;
-      }
-
       if (!ipAddress) {
-        throw new Error('无法获取IP地址，请确认设备已连接到WiFi或以太网。');
+        const errorMsg = '无法获取设备IP地址。请确保：\n1. 设备已连接到WiFi或网络\n2. 网络连接正常\n3. 如使用Android TV，请检查网络设置';
+        logger.error('[TCPHttpServer]', errorMsg);
+        throw new Error(errorMsg);
       }
 
       if (this.isRunning) {
