@@ -66,7 +66,7 @@ export const useRemoteControlStore = create<RemoteControlState>((set, get) => ({
       });
 
       try {
-        const url = await remoteControlService.startServer();
+         const url = await remoteControlService.startServer();
         logger.info('Server started, URL:', url);
         set({ isServerRunning: true, serverUrl: url, error: null, retryCount: 0, isInitializing: false });
       } catch (serverError) {
@@ -79,9 +79,8 @@ export const useRemoteControlStore = create<RemoteControlState>((set, get) => ({
           // Wait before retrying
           await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
           
-          // Retry
-          const { startServer } = get();
-          startServer();
+          // Retry sequentially with await
+          await get().startServer();
         } else {
           const errorMessage = '启动失败，请检查网络连接后重试。';
           logger.error('Failed to start server after retries:', serverError);

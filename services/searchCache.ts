@@ -29,6 +29,21 @@ class SearchCache {
   private memoryCache: Map<string, CacheEntry> = new Map();
 
   /**
+   * Simple hash function for cache key generation
+   * Uses a basic approach suitable for the query length we expect
+   */
+  private hashQuery(query: string): string {
+    let hash = 0;
+    const normalized = query.toLowerCase().trim();
+    for (let i = 0; i < normalized.length; i++) {
+      const char = normalized.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32bit integer
+    }
+    return Math.abs(hash).toString(16);
+  }
+
+  /**
    * Get search results from cache
    * @param query Search query
    * @returns Cached results or null if expired or not found
@@ -137,10 +152,11 @@ class SearchCache {
   }
 
   /**
-   * Generate cache key from query
+   * Generate cache key from query using hash to prevent collisions
    */
   private generateCacheKey(query: string): string {
-    return `${CACHE_KEY_PREFIX}${query.toLowerCase().trim()}`;
+    const hash = this.hashQuery(query);
+    return `${CACHE_KEY_PREFIX}${hash}`;
   }
 
   /**
@@ -160,26 +176,32 @@ class SearchCache {
 
       // If cache size exceeds limit, remove oldest entries
       if (cacheKeys.length > MAX_CACHE_ENTRIES) {
+        // Use multiGet to fetch all entries in one batch for efficiency
+        const batchedEntries = await AsyncStorage.multiGet(cacheKeys);
         const entries: Array<{ key: string; timestamp: number }> = [];
 
-        for (const key of cacheKeys) {
-          const data = await AsyncStorage.getItem(key);
+        for (const [key, data] of batchedEntries) {
           if (data) {
-            const entry: CacheEntry = JSON.parse(data);
-            entries.push({ key, timestamp: entry.timestamp });
+            try {
+              const entry: CacheEntry = JSON.parse(data);
+              entries.push({ key, timestamp: entry.timestamp });
+            } catch (e) {
+              // Skip malformed entries
+              logger.warn(`Skipping malformed cache entry: ${key}`);
+            }
           }
         }
 
         // Sort by timestamp and remove oldest ones
         entries.sort((a, b) => a.timestamp - b.timestamp);
         const toRemove = entries.slice(0, entries.length - MAX_CACHE_ENTRIES);
+        const keysToRemove = toRemove.map((entry) => entry.key);
 
-        for (const entry of toRemove) {
-          await AsyncStorage.removeItem(entry.key);
-          this.memoryCache.delete(entry.key);
+        if (keysToRemove.length > 0) {
+          await AsyncStorage.multiRemove(keysToRemove);
+          keysToRemove.forEach((key) => this.memoryCache.delete(key));
+          logger.debug(`Cleaned up ${keysToRemove.length} old cache entries`);
         }
-
-        logger.debug(`Cleaned up ${toRemove.length} old cache entries`);
       }
     } catch (error) {
       logger.warn('Error cleaning up cache:', error);
