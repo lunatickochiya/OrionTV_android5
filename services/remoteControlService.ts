@@ -4,6 +4,9 @@ import { Platform } from 'react-native';
 
 const logger = Logger.withTag('RemoteControl');
 
+// 服务器启动超时时间（10秒）
+const SERVER_START_TIMEOUT = 10000;
+
 const getRemotePageHTML = () => {
   return `
   <!DOCTYPE html>
@@ -13,7 +16,7 @@ const getRemotePageHTML = () => {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <style>
-      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); margin: 0; padding: 20px; }
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; background-color: #121212; color: white; }
       h3 { color: #eee; }
       #container { display: flex; flex-direction: column; align-items: center; width: 90%; max-width: 400px; }
       #text { width: 100%; padding: 15px; font-size: 16px; border-radius: 8px; border: 1px solid #333; background-color: #2a2a2a; color: white; margin-bottom: 20px; box-sizing: border-box; }
@@ -62,6 +65,7 @@ class RemoteControlService {
   private httpServer: TCPHttpServer;
   private onMessage: (message: string) => void = () => {};
   private onHandshake: () => void = () => {};
+  private startTimeout: NodeJS.Timeout | null = null;
 
   constructor() {
     this.httpServer = new TCPHttpServer();
@@ -155,12 +159,35 @@ class RemoteControlService {
       logger.debug("[RemoteControl] Attempting to start server...");
 
       try {
-        const url = await this.httpServer.start();
+        // 包装Promise，添加超时控制
+        const serverStartPromise = this.httpServer.start();
+        
+        const timeoutPromise = new Promise<string>((_, reject) => {
+          this.startTimeout = setTimeout(() => {
+            reject(new Error('服务器启动超时（10秒）。请检查网络连接或重试。'));
+          }, SERVER_START_TIMEOUT);
+        });
+
+        const url = await Promise.race([serverStartPromise, timeoutPromise]);
+        
+        // 清除超时定时器
+        if (this.startTimeout) {
+          clearTimeout(this.startTimeout);
+          this.startTimeout = null;
+        }
+
         logger.info(`[RemoteControl] Server started successfully at: ${url}`);
         return url;
       } catch (error) {
-        logger.error("[RemoteControl] Failed to start server:", error);
-        throw new Error(error instanceof Error ? error.message : "Failed to start server");
+        // 清除超时定时器
+        if (this.startTimeout) {
+          clearTimeout(this.startTimeout);
+          this.startTimeout = null;
+        }
+
+        const errorMessage = error instanceof Error ? error.message : "Failed to start server";
+        logger.error("[RemoteControl] Failed to start server:", errorMessage);
+        throw new Error(errorMessage);
       }
     } catch (error) {
       logger.error("[RemoteControl] Unexpected error in startServer:", error);
@@ -171,6 +198,13 @@ class RemoteControlService {
   public stopServer() {
     try {
       logger.debug("[RemoteControl] Stopping server...");
+      
+      // 清除启动超时
+      if (this.startTimeout) {
+        clearTimeout(this.startTimeout);
+        this.startTimeout = null;
+      }
+
       this.httpServer.stop();
     } catch (error) {
       logger.error("[RemoteControl] Error stopping server:", error);
