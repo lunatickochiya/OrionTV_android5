@@ -16,9 +16,18 @@ export const RemoteControlModal: React.FC = () => {
           <ThemedText style={styles.title}>手机扫码</ThemedText>
           <View style={styles.qrContainer}>
             {serverUrl ? (
-              <>
-                <QRCode value={serverUrl} size={200} backgroundColor="white" color="black" />
-              </>
+              <View style={styles.qrWrapper}>
+                <QRCode 
+                  value={serverUrl} 
+                  size={200} 
+                  backgroundColor="white" 
+                  color="black"
+                  getRef={(ref) => {
+                    // Store ref for potential future use
+                  }}
+                  quiet={4}
+                />
+              </View>
             ) : (
               <ThemedText style={styles.statusText}>{error ? `错误: ${error}` : "正在生成二维码..."}</ThemedText>
             )}
@@ -61,6 +70,14 @@ const styles = StyleSheet.create({
     backgroundColor: "#f0f0f0",
     borderRadius: 8,
     marginBottom: 20,
+    overflow: "hidden",
+  },
+  qrWrapper: {
+    width: "100%",
+    height: "100%",
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "white",
   },
   statusText: {
     textAlign: "center",
