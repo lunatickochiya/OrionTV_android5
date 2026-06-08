@@ -31,44 +31,87 @@ export const useRemoteControlStore = create<RemoteControlState>((set, get) => ({
     if (get().isServerRunning) {
       return;
     }
-    remoteControlService.init({
-      onMessage: (message: string) => {
-        logger.debug('Received message:', message);
-        const currentState = get();
-        // Use the current targetPage from the store
-        set({ lastMessage: message, targetPage: currentState.targetPage });
-      },
-      onHandshake: () => {
-        logger.debug('Handshake successful');
-        set({ isModalVisible: false })
-      },
-    });
+    
     try {
-      const url = await remoteControlService.startServer();
-      logger.info('Server started, URL:', url);
-      set({ isServerRunning: true, serverUrl: url, error: null });
-    } catch {
+      remoteControlService.init({
+        onMessage: (message: string) => {
+          try {
+            logger.debug('Received message:', message);
+            const currentState = get();
+            // Use the current targetPage from the store
+            set({ lastMessage: message, targetPage: currentState.targetPage });
+          } catch (e) {
+            logger.error('Error handling message:', e);
+          }
+        },
+        onHandshake: () => {
+          try {
+            logger.debug('Handshake successful');
+            set({ isModalVisible: false });
+          } catch (e) {
+            logger.error('Error handling handshake:', e);
+          }
+        },
+      });
+
+      try {
+        const url = await remoteControlService.startServer();
+        logger.info('Server started, URL:', url);
+        set({ isServerRunning: true, serverUrl: url, error: null });
+      } catch (serverError) {
+        const errorMessage = '启动失败，请检查网络连接后重试。';
+        logger.error('Failed to start server:', serverError);
+        set({ error: errorMessage, isServerRunning: false });
+      }
+    } catch (error) {
       const errorMessage = '启动失败，请强制退应用后重试。';
-      logger.error('Failed to start server:', errorMessage);
-      set({ error: errorMessage });
+      logger.error('Unexpected error in startServer:', error);
+      set({ error: errorMessage, isServerRunning: false });
     }
   },
 
   stopServer: () => {
-    if (get().isServerRunning) {
-      remoteControlService.stopServer();
+    try {
+      if (get().isServerRunning) {
+        remoteControlService.stopServer();
+        set({ isServerRunning: false, serverUrl: null });
+      }
+    } catch (error) {
+      logger.error('Error stopping server:', error);
+      // 即使出错也更新状态
       set({ isServerRunning: false, serverUrl: null });
     }
   },
 
-  showModal: (targetPage?: string) => set({ isModalVisible: true, targetPage }),
-  hideModal: () => set({ isModalVisible: false, targetPage: null }),
+  showModal: (targetPage?: string) => {
+    try {
+      set({ isModalVisible: true, targetPage });
+    } catch (e) {
+      logger.error('Error showing modal:', e);
+    }
+  },
+
+  hideModal: () => {
+    try {
+      set({ isModalVisible: false, targetPage: null });
+    } catch (e) {
+      logger.error('Error hiding modal:', e);
+    }
+  },
 
   setMessage: (message: string, targetPage?: string) => {
-    set({ lastMessage: `${message}_${Date.now()}`, targetPage });
+    try {
+      set({ lastMessage: `${message}_${Date.now()}`, targetPage });
+    } catch (e) {
+      logger.error('Error setting message:', e);
+    }
   },
 
   clearMessage: () => {
-    set({ lastMessage: null, targetPage: null });
+    try {
+      set({ lastMessage: null, targetPage: null });
+    } catch (e) {
+      logger.error('Error clearing message:', e);
+    }
   },
 }));
