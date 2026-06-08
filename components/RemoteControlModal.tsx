@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { Modal, View, StyleSheet, ActivityIndicator } from "react-native";
 import QRCode from "react-native-qrcode-svg";
 import { useRemoteControlStore } from "@/stores/remoteControlStore";
@@ -8,9 +8,20 @@ import { StyledButton } from "./StyledButton";
 import { useThemeColor } from "@/hooks/useThemeColor";
 
 export const RemoteControlModal: React.FC = () => {
-  const { isModalVisible, hideModal, serverUrl, error, isServerRunning } = useRemoteControlStore();
+  const { isModalVisible, hideModal, serverUrl, error, isServerRunning, startServer } = useRemoteControlStore();
   const backgroundColor = useThemeColor({}, "background");
   const textColor = useThemeColor({}, "text");
+
+  // Start server when modal is shown, unless one is already running
+  useEffect(() => {
+    // Note: startServer is a function from Zustand store (stable reference)
+    // We omit it from dependencies to prevent unnecessary re-triggers
+    // Instead, we rely on the individual state flags to determine when to start
+    if (isModalVisible && !isServerRunning) {
+      startServer();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isModalVisible, isServerRunning]);
 
   return (
     <Modal animationType="fade" transparent={true} visible={isModalVisible} onRequestClose={hideModal}>
@@ -49,7 +60,22 @@ export const RemoteControlModal: React.FC = () => {
             </ThemedText>
           )}
 
-          <StyledButton text="关闭" onPress={hideModal} style={styles.button} variant="primary" />
+          <View style={styles.buttonContainer}>
+            {error && (
+              <StyledButton
+                text="重试"
+                onPress={startServer}
+                style={[styles.button, styles.retryButton]}
+                variant="primary"
+              />
+            )}
+            <StyledButton
+              text="关闭"
+              onPress={hideModal}
+              style={[styles.button, error && styles.closeButtonWithRetry]}
+              variant="primary"
+            />
+          </View>
         </ThemedView>
       </View>
     </Modal>
@@ -121,7 +147,18 @@ const styles = StyleSheet.create({
     color: "#999",
     lineHeight: 18,
   },
-  button: {
+  buttonContainer: {
     width: "100%",
+    flexDirection: "row",
+    gap: 8,
+  },
+  button: {
+    flex: 1,
+  },
+  retryButton: {
+    marginRight: 0,
+  },
+  closeButtonWithRetry: {
+    flex: 1,
   },
 });
