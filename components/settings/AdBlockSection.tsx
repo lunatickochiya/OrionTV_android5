@@ -15,7 +15,7 @@ interface AdBlockSectionProps {
 }
 
 export const AdBlockSection: React.FC<AdBlockSectionProps> = ({ onChanged, onFocus, onBlur }) => {
-  const { blockAdsEnabled, setBlockAdsEnabled, proxyM3U8Token, setProxyM3U8Token } = useSettingsStore();
+  const { blockAdsEnabled, setBlockAdsEnabled, proxyM3U8Token, setProxyM3U8Token, proxyEndpointStyle } = useSettingsStore();
   const [isFocused, setIsFocused] = React.useState(false);
   const animationStyle = useButtonAnimation(isFocused, 1.2);
   const deviceType = useResponsiveLayout().deviceType;
@@ -96,7 +96,7 @@ export const AdBlockSection: React.FC<AdBlockSectionProps> = ({ onChanged, onFoc
           <View style={styles.statusItem}>
             <ThemedText style={styles.statusLabel}>代理令牌：</ThemedText>
             <ThemedText style={styles.statusDescription}>
-              如果后端需要认证令牌，在此填写
+              MoonTVPlus 后端填写 NEXT_PUBLIC_PROXY_M3U8_TOKEN，旧版后端无需填写
             </ThemedText>
           </View>
           <TextInput
@@ -112,6 +112,16 @@ export const AdBlockSection: React.FC<AdBlockSectionProps> = ({ onChanged, onFoc
             autoCorrect={false}
             secureTextEntry={false}
           />
+          <View style={styles.statusItem}>
+            <ThemedText style={styles.statusLabel}>代理端点：</ThemedText>
+            <ThemedText style={styles.statusDescription}>
+              {proxyEndpointStyle === "moontvplus"
+                ? "已检测到 MoonTVPlus（/api/proxy-m3u8，服务端去广告）"
+                : proxyEndpointStyle === "legacy"
+                ? "已检测到旧版 MoonTV（/api/proxy/m3u8）"
+                : "未检测（首次播放时自动识别）"}
+            </ThemedText>
+          </View>
         </View>
       )}
     </SettingsSection>

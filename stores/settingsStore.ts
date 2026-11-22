@@ -1,11 +1,14 @@
 import { create } from "zustand";
 import { SettingsManager } from "@/services/storage";
-import { api, ServerConfig } from "@/services/api";
+import { api, ServerConfig, ProxyEndpointStyle } from "@/services/api";
 import { storageConfig } from "@/services/storageConfig";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Logger from "@/utils/Logger";
 
 const logger = Logger.withTag('SettingsStore');
+
+// 探测结果的持久化 key（独立于 SettingsManager，避免污染既有 settings 结构）
+const PROXY_ENDPOINT_STYLE_KEY = 'proxyEndpointStyle';
 
 // 模块级引用：当前正在进行的 fetchServerConfig Promise。
 // 供 authStore.checkLoginStatus 直接 await，避免用固定超时轮询导致冷启动误判。
@@ -34,8 +37,11 @@ interface SettingsState {
   isModalVisible: boolean;
   serverConfig: ServerConfig | null;
   isLoadingServerConfig: boolean;
+  // 后端 M3U8 代理端点风格（探测后缓存）
+  proxyEndpointStyle: ProxyEndpointStyle;
   loadSettings: () => Promise<void>;
   fetchServerConfig: () => Promise<void>;
+  detectProxyEndpointStyle: () => Promise<ProxyEndpointStyle>;
   setApiBaseUrl: (url: string) => void;
   setM3uUrl: (url: string) => void;
   setRemoteInputEnabled: (enabled: boolean) => void;
@@ -57,6 +63,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   serverConfig: null,
   isLoadingServerConfig: false,
   proxyM3U8Token: "",
+  proxyEndpointStyle: "unknown",
   videoSource: {
     enabledAll: true,
     sources: {},
@@ -74,6 +81,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         sources: {},
       },
     });
+    // 恢复上次探测的后端代理风格（避免每次冷启动都重新探测）
+    try {
+      const savedStyle = await AsyncStorage.getItem(PROXY_ENDPOINT_STYLE_KEY);
+      if (savedStyle === "moontvplus" || savedStyle === "legacy") {
+        set({ proxyEndpointStyle: savedStyle });
+      }
+    } catch {
+      // 读取失败按 unknown 处理，后续重新探测
+    }
     if (settings.apiBaseUrl) {
       api.setBaseUrl(settings.apiBaseUrl);
       api.setProxyToken(settings.proxyM3U8Token || "");
@@ -88,6 +104,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         if (config) {
           storageConfig.setStorageType(config.StorageType);
           set({ serverConfig: config });
+          // fire-and-forget：后台探测后端代理端点风格，不阻塞启动流程
+          get().detectProxyEndpointStyle().catch(() => {});
         }
       } catch (error) {
         set({ serverConfig: null });
@@ -98,6 +116,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     })();
     serverConfigPromise = p;
     return p;
+  },
+  detectProxyEndpointStyle: async () => {
+    const { proxyEndpointStyle } = get();
+    if (proxyEndpointStyle !== "unknown") {
+      return proxyEndpointStyle;
+    }
+    const style = await api.probeProxyEndpointStyle();
+    if (style !== "unknown") {
+      set({ proxyEndpointStyle: style });
+      AsyncStorage.setItem(PROXY_ENDPOINT_STYLE_KEY, style).catch(() => {});
+    }
+    return style;
   },
   setApiBaseUrl: (url) => set({ apiBaseUrl: url }),
   setM3uUrl: (url) => set({ m3uUrl: url }),
@@ -138,6 +168,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     });
     if ( currentApiBaseUrl !== processedApiBaseUrl) {
       await AsyncStorage.setItem('authCookies', '');
+      // 后端地址变更：重置代理端点风格，重新探测
+      set({ proxyEndpointStyle: "unknown" });
+      AsyncStorage.removeItem(PROXY_ENDPOINT_STYLE_KEY).catch(() => {});
     }
     api.setBaseUrl(processedApiBaseUrl);
     api.setProxyToken(proxyM3U8Token);

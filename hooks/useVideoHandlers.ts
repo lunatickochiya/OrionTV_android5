@@ -10,7 +10,8 @@ import Logger from '@/utils/Logger';
 
 const logger = Logger.withTag('VideoHandlers');
 
-type AdBlockMode = 'proxy' | 'direct';
+// 去广告代理模式状态机：MoonTVPlus 端点 → 旧版 MoonTV 端点 → 直连
+type AdBlockMode = 'moontvplus' | 'legacy' | 'direct';
 
 interface UseVideoHandlersProps {
   videoRef: RefObject<Video>;
@@ -34,7 +35,7 @@ export const useVideoHandlers = ({
   detail,
 }: UseVideoHandlersProps) => {
   const failedProxyUrls = useRef<Set<string>>(new Set());
-  const [adBlockMode, setAdBlockMode] = useState<AdBlockMode>('proxy');
+  const [adBlockMode, setAdBlockMode] = useState<AdBlockMode>('moontvplus');
 
   const onLoad = useCallback(async () => {
     console.info(`[PERF] Video onLoad - video ready to play`);
@@ -65,20 +66,49 @@ export const useVideoHandlers = ({
     usePlayerStore.setState({ isLoading: true });
   }, [currentEpisode?.url]);
 
+  // 根据当前模式与后端探测结果生成代理 URL；direct 或不适用时返回 null
+  const buildProxyUrl = useCallback((url: string, source: string): string | null => {
+    if (adBlockMode === 'direct') return null;
+    const { proxyEndpointStyle } = useSettingsStore.getState();
+    if (adBlockMode === 'legacy') {
+      // 已知后端是 MoonTVPlus 时无需再回退旧端点（该路径只对直播源有效）
+      if (proxyEndpointStyle === 'moontvplus') return null;
+      return api.getM3U8ProxyUrl(url, source);
+    }
+    // adBlockMode === 'moontvplus'
+    if (proxyEndpointStyle === 'legacy') {
+      return api.getM3U8ProxyUrl(url, source);
+    }
+    return api.getMoonTVPlusProxyM3U8Url(url, source);
+  }, [adBlockMode]);
+
+  // 代理失败后的降级目标：moontvplus → legacy（仅旧版后端）→ direct
+  const degradeAdBlockMode = useCallback((current: AdBlockMode): AdBlockMode => {
+    if (current === 'moontvplus') {
+      const { proxyEndpointStyle } = useSettingsStore.getState();
+      // 已探测为 MoonTVPlus 的后端没有可用的旧端点，直接直连
+      return proxyEndpointStyle === 'moontvplus' ? 'direct' : 'legacy';
+    }
+    return 'direct';
+  }, []);
+
   const onError = useCallback((error: any) => {
     if (!currentEpisode?.url) return;
 
     console.error(`[ERROR] Video playback error:`, error);
 
-    if (adBlockMode === 'proxy' && useSettingsStore.getState().blockAdsEnabled && isM3U8Url(currentEpisode.url)) {
+    if (adBlockMode !== 'direct' && useSettingsStore.getState().blockAdsEnabled && isM3U8Url(currentEpisode.url)) {
       const apiBaseUrl = useSettingsStore.getState().apiBaseUrl;
       if (apiBaseUrl) {
         const source = detail?.source || useDetailStore.getState()?.detail?.source || '';
-        const proxyUrl = api.getM3U8ProxyUrl(currentEpisode.url, source);
+        const proxyUrl = adBlockMode === 'moontvplus'
+          ? api.getMoonTVPlusProxyM3U8Url(currentEpisode.url, source)
+          : api.getM3U8ProxyUrl(currentEpisode.url, source);
         if (!failedProxyUrls.current.has(proxyUrl)) {
-          logger.warn('[AD_BLOCK] Proxy URL failed, falling back to direct playback');
           failedProxyUrls.current.add(proxyUrl);
-          setAdBlockMode('direct');
+          const nextMode = degradeAdBlockMode(adBlockMode);
+          logger.warn(`[AD_BLOCK] Proxy mode '${adBlockMode}' failed, degrading to '${nextMode}'`);
+          setAdBlockMode(nextMode);
           return;
         }
       }
@@ -117,7 +147,7 @@ export const useVideoHandlers = ({
       });
       usePlayerStore.getState().handleVideoError('other', currentEpisode.url);
     }
-  }, [currentEpisode?.url, detail?.source, adBlockMode]);
+  }, [currentEpisode?.url, detail?.source, adBlockMode, degradeAdBlockMode]);
 
   const blockAdsEnabled = useSettingsStore((s) => s.blockAdsEnabled);
 
@@ -127,17 +157,18 @@ export const useVideoHandlers = ({
     if (!blockAdsEnabled || !apiBaseUrl || !isM3U8Url(url)) {
       return url;
     }
-    if (adBlockMode === 'direct') {
+    const source = detail?.source || useDetailStore.getState()?.detail?.source || '';
+    const proxyUrl = buildProxyUrl(url, source);
+    if (proxyUrl === null) {
+      logger.info('[AD_BLOCK] Proxy unavailable, using direct playback');
       return url;
     }
-    const source = detail?.source || useDetailStore.getState()?.detail?.source || '';
-    const proxyUrl = api.getM3U8ProxyUrl(url, source);
     if (failedProxyUrls.current.has(proxyUrl)) {
       logger.info('[AD_BLOCK] Skipping previously failed proxy URL, using direct playback');
       return url;
     }
     return proxyUrl;
-  }, [blockAdsEnabled, detail?.source, adBlockMode]);
+  }, [blockAdsEnabled, detail?.source, buildProxyUrl]);
 
   const videoUrl = useMemo(() => getVideoUrl(currentEpisode?.url || ''), [currentEpisode?.url, getVideoUrl]);
 

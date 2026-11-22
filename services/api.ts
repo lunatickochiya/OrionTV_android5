@@ -73,7 +73,18 @@ export interface ApiSite {
 export interface ServerConfig {
   SiteName: string;
   StorageType: "localstorage" | "redis" | string;
+  // MoonTVPlus 起新增的可选字段（旧版 MoonTV 不返回）
+  Version?: string;
+  TVModeEnabled?: boolean;
 }
+
+/**
+ * M3U8 去广告代理端点风格：
+ * - moontvplus: MoonTVPlus 的外部播放器专用端点 /api/proxy-m3u8（token 鉴权 + 服务端去广告）
+ * - legacy: 旧版 MoonTV 的 /api/proxy/m3u8（cookie 鉴权，moontv-source 参数）
+ * - unknown: 尚未探测
+ */
+export type ProxyEndpointStyle = "moontvplus" | "legacy" | "unknown";
 
 export class API {
   public baseURL: string = "";
@@ -233,6 +244,39 @@ export class API {
       url += `&token=${encodeURIComponent(this.proxyToken)}`;
     }
     return url;
+  }
+
+  /**
+   * MoonTVPlus 外部播放器代理 URL：
+   * GET /api/proxy-m3u8?url=<原始m3u8>&source=<源key>&token=<鉴权token>[&adblock=false]
+   * 服务端执行去广告（含站长自定义规则），无需登录 cookie。
+   */
+  getMoonTVPlusProxyM3U8Url(videoUrl: string, source: string, adBlock: boolean = true): string {
+    let url = `${this.baseURL}/api/proxy-m3u8?url=${encodeURIComponent(videoUrl)}&source=${encodeURIComponent(source)}`;
+    if (this.proxyToken) {
+      url += `&token=${encodeURIComponent(this.proxyToken)}`;
+    }
+    if (!adBlock) {
+      url += `&adblock=false`;
+    }
+    return url;
+  }
+
+  /**
+   * 探测后端 M3U8 代理端点风格。
+   * MoonTVPlus 存在 /api/proxy-m3u8 路由（无参数返回 400/401），
+   * 旧版 MoonTV 没有该路由（404）。
+   */
+  async probeProxyEndpointStyle(): Promise<ProxyEndpointStyle> {
+    if (!this.baseURL) {
+      return "unknown";
+    }
+    try {
+      const response = await fetch(`${this.baseURL}/api/proxy-m3u8`);
+      return response.status === 404 ? "legacy" : "moontvplus";
+    } catch {
+      return "unknown";
+    }
   }
 
   getM3U8SegmentUrl(videoUrl: string): string {
