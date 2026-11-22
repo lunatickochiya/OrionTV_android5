@@ -72,7 +72,7 @@ export const RemoteControlModal: React.FC = () => {
             <StyledButton
               text="关闭"
               onPress={hideModal}
-              style={[styles.button, error && styles.closeButtonWithRetry]}
+              style={[styles.button, error ? styles.closeButtonWithRetry : null]}
               variant="primary"
             />
           </View>
