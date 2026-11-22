@@ -101,17 +101,21 @@ class TCPHttpServer {
       }
 
       const headers = {
+        // keep-alive 下 Content-Length 是响应边界依据，必须保留
         'Content-Length': contentLength.toString(),
-        'Connection': 'close',
+        // keep-alive：浏览器对同源 fetch 默认复用连接，
+        // 整个扫码输入会话只需一条 TCP 连接，规避老 ROM 上
+        // 服务端 accept 后续连接失效的问题
+        'Connection': 'keep-alive',
         ...response.headers
       };
 
       let httpResponse = `HTTP/1.1 ${response.statusCode} ${statusText}\r\n`;
-      
+
       for (const [key, value] of Object.entries(headers)) {
         httpResponse += `${key}: ${value}\r\n`;
       }
-      
+
       httpResponse += '\r\n';
       httpResponse += response.body;
 
@@ -201,11 +205,8 @@ class TCPHttpServer {
               }
             }
 
-            try {
-              socket.end();
-            } catch (endError) {
-              logger.warn('[TCPHttpServer] Error ending socket:', endError);
-            }
+            // keep-alive：不主动关闭连接，浏览器会在同一连接上发送
+            // 后续消息（POST /message 等），由 socket 空闲超时负责回收
             requestData = '';
           }
         } catch (dataError) {
