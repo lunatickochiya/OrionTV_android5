@@ -311,8 +311,9 @@ export class API {
     const response = await this._fetch(url, { signal });
     const data = await response.json();
 
-    // Cache the results
-    if (data.results && Array.isArray(data.results)) {
+    // Cache the results（空结果不缓存：资源站临时故障返回空时，
+    // 缓存空数组会让该关键词在 TTL 内永远搜不到）
+    if (data.results && Array.isArray(data.results) && data.results.length > 0) {
       await searchCache.set(query, data.results);
     }
 

@@ -17,6 +17,8 @@ export interface SearchResult {
 }
 
 interface CacheEntry {
+  /** 规范化后的原始查询：hash 碰撞时用于校验，避免不同查询串结果 */
+  query: string;
   results: SearchResult[];
   timestamp: number;
 }
@@ -29,6 +31,12 @@ const CLEANUP_THRESHOLD_BUFFER = 10;
 
 class SearchCache {
   private memoryCache: Map<string, CacheEntry> = new Map();
+  /**
+   * 持久层条目计数缓存：避免每次 set 都 getAllKeys 全量枚举。
+   * null 表示尚未统计（首次 set 时统计一次），此后按写入增量维护，
+   * cleanup 后重新统计。
+   */
+  private storageCount: number | null = null;
 
   /**
    * Simple hash function for cache key generation
@@ -49,32 +57,45 @@ class SearchCache {
   /**
    * Get search results from cache
    * @param query Search query
-   * @returns Cached results or null if expired or not found
+   * @returns Cached results or null if expired, not found, or hash collision
    */
   public async get(query: string): Promise<SearchResult[] | null> {
     try {
+      const normalized = this.normalizeQuery(query);
       const cacheKey = this.generateCacheKey(query);
 
       // Check memory cache first
       const memoryCached = this.memoryCache.get(cacheKey);
-      if (memoryCached && !this.isExpired(memoryCached)) {
-        logger.debug(`Cache hit (memory) for query: "${query}"`);
-        return memoryCached.results;
+      if (memoryCached) {
+        if (this.isExpired(memoryCached)) {
+          this.memoryCache.delete(cacheKey);
+        } else if (this.matchesQuery(memoryCached, normalized)) {
+          logger.debug(`Cache hit (memory) for query: "${query}"`);
+          return memoryCached.results;
+        } else {
+          // hash 碰撞：清掉错误条目，按 miss 处理
+          logger.warn(`Cache key collision detected for query: "${query}", discarding stale entry`);
+          this.memoryCache.delete(cacheKey);
+        }
       }
 
       // Check persistent storage
       const persistedData = await AsyncStorage.getItem(cacheKey);
       if (persistedData) {
         const entry: CacheEntry = JSON.parse(persistedData);
-        if (!this.isExpired(entry)) {
+        if (this.isExpired(entry)) {
+          // Remove expired entry
+          await AsyncStorage.removeItem(cacheKey);
+          this.memoryCache.delete(cacheKey);
+        } else if (this.matchesQuery(entry, normalized)) {
           logger.debug(`Cache hit (storage) for query: "${query}"`);
           // Update memory cache
           this.memoryCache.set(cacheKey, entry);
           return entry.results;
         } else {
-          // Remove expired entry
+          // hash 碰撞：清掉错误条目，按 miss 处理
+          logger.warn(`Cache key collision detected for query: "${query}", discarding persisted entry`);
           await AsyncStorage.removeItem(cacheKey);
-          this.memoryCache.delete(cacheKey);
         }
       }
 
@@ -93,21 +114,36 @@ class SearchCache {
    */
   public async set(query: string, results: SearchResult[]): Promise<void> {
     try {
+      const normalized = this.normalizeQuery(query);
       const cacheKey = this.generateCacheKey(query);
       const entry: CacheEntry = {
+        query: normalized,
         results,
         timestamp: Date.now(),
       };
 
-      // Store in memory
+      // Store in memory（超限时淘汰最旧条目，Map 迭代序即插入序）
+      if (!this.memoryCache.has(cacheKey) && this.memoryCache.size >= MAX_CACHE_ENTRIES) {
+        const oldestKey = this.memoryCache.keys().next().value;
+        if (oldestKey !== undefined) {
+          this.memoryCache.delete(oldestKey);
+        }
+      }
       this.memoryCache.set(cacheKey, entry);
 
       // Store in persistent storage
       await AsyncStorage.setItem(cacheKey, JSON.stringify(entry));
 
-      // Check if cleanup is needed (only run cleanup when significantly over limit)
-      const stats = await this.getStats();
-      if (stats.storageCacheSize > MAX_CACHE_ENTRIES + CLEANUP_THRESHOLD_BUFFER) {
+      // 惰性统计：首次写入时统计一次持久层条目数，此后按写入增量维护，
+      // 避免每次 set 都 getAllKeys 全量枚举（AsyncStorage 全库扫描开销）
+      if (this.storageCount === null) {
+        const stats = await this.getStats();
+        this.storageCount = stats.storageCacheSize;
+      } else {
+        this.storageCount += 1;
+      }
+
+      if (this.storageCount > MAX_CACHE_ENTRIES + CLEANUP_THRESHOLD_BUFFER) {
         await this.cleanupOldEntries();
       }
 
@@ -127,12 +163,16 @@ class SearchCache {
         const cacheKey = this.generateCacheKey(query);
         this.memoryCache.delete(cacheKey);
         await AsyncStorage.removeItem(cacheKey);
+        if (this.storageCount !== null && this.storageCount > 0) {
+          this.storageCount -= 1;
+        }
         logger.debug(`Cleared cache for query: "${query}"`);
       } else {
         this.memoryCache.clear();
         const keys = await AsyncStorage.getAllKeys();
         const cacheKeys = keys.filter((key) => key.startsWith(CACHE_KEY_PREFIX));
         await AsyncStorage.multiRemove(cacheKeys);
+        this.storageCount = 0;
         logger.debug('Cleared all search cache');
       }
     } catch (error) {
@@ -167,6 +207,20 @@ class SearchCache {
   }
 
   /**
+   * Normalize query for cache identity (与 hashQuery 保持一致的规范化规则)
+   */
+  private normalizeQuery(query: string): string {
+    return query.toLowerCase().trim();
+  }
+
+  /**
+   * 校验缓存条目确实属于该查询（防 32 位 hash 碰撞返回无关结果）
+   */
+  private matchesQuery(entry: CacheEntry, normalizedQuery: string): boolean {
+    return entry.query === normalizedQuery;
+  }
+
+  /**
    * Check if cache entry is expired
    */
   private isExpired(entry: CacheEntry): boolean {
@@ -185,14 +239,14 @@ class SearchCache {
       if (cacheKeys.length > MAX_CACHE_ENTRIES) {
         // Use multiGet to fetch all entries in one batch for efficiency
         const batchedEntries = await AsyncStorage.multiGet(cacheKeys);
-        const entries: Array<{ key: string; timestamp: number }> = [];
+        const entries: { key: string; timestamp: number }[] = [];
 
         for (const [key, data] of batchedEntries) {
           if (data) {
             try {
               const entry: CacheEntry = JSON.parse(data);
               entries.push({ key, timestamp: entry.timestamp });
-            } catch (e) {
+            } catch {
               // Skip malformed entries
               logger.warn(`Skipping malformed cache entry: ${key}`);
             }
@@ -207,6 +261,8 @@ class SearchCache {
         if (keysToRemove.length > 0) {
           await AsyncStorage.multiRemove(keysToRemove);
           keysToRemove.forEach((key) => this.memoryCache.delete(key));
+          // 同步计数缓存，保持后续阈值判断准确
+          this.storageCount = entries.length - keysToRemove.length;
           logger.debug(`Cleaned up ${keysToRemove.length} old cache entries`);
         }
       }
