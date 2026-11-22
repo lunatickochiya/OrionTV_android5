@@ -122,7 +122,12 @@ const VideoCardMobile = forwardRef<View, VideoCardMobileProps>(
           delayLongPress={800}
         >
           <View style={styles.card}>
-            <Image source={{ uri: api.getImageProxyUrl(poster) }} style={styles.poster} />
+            {/* resizeMethod="resize"：Android 下直接按视图尺寸解码，避免全尺寸海报位图驻留内存 */}
+            <Image
+              source={{ uri: api.getImageProxyUrl(poster) }}
+              style={styles.poster}
+              resizeMethod="resize"
+            />
             
             {/* 进度条 */}
             {isContinueWatching && (

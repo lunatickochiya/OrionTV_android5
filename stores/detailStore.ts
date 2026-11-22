@@ -67,26 +67,33 @@ const useDetailStore = create<DetailState>((set, get) => ({
     const processAndSetResults = async (results: SearchResult[], merge = false) => {
       const resolutionStart = performance.now();
       logger.info(`[PERF] Resolution detection START - processing ${results.length} sources`);
-      
-      const resultsWithResolution = await Promise.all(
-        results.map(async (searchResult) => {
-          let resolution;
-          const m3u8Start = performance.now();
-          try {
-            if (searchResult.episodes && searchResult.episodes.length > 0) {
-              resolution = await getResolutionFromM3U8(searchResult.episodes[0], signal);
+
+      // 并发限流：全部源同时探测会对 20-40 个 m3u8 并发 fetch + 整文件读入，
+      // 在低内存设备上造成瞬时内存尖峰；改为小批次推进
+      const RESOLUTION_CONCURRENCY = 4;
+      const resultsWithResolution: (SearchResult & { resolution?: string | null })[] = [];
+      for (let i = 0; i < results.length; i += RESOLUTION_CONCURRENCY) {
+        if (signal.aborted) return;
+        const batch = results.slice(i, i + RESOLUTION_CONCURRENCY);
+        const batchResults = await Promise.all(
+          batch.map(async (searchResult) => {
+            let resolution;
+            try {
+              if (searchResult.episodes && searchResult.episodes.length > 0) {
+                resolution = await getResolutionFromM3U8(searchResult.episodes[0], signal);
+              }
+            } catch (e) {
+              if ((e as Error).name !== "AbortError") {
+                logger.info(`Failed to get resolution for ${searchResult.source_name}`, e);
+              }
             }
-          } catch (e) {
-            if ((e as Error).name !== "AbortError") {
-              logger.info(`Failed to get resolution for ${searchResult.source_name}`, e);
-            }
-          }
-          const m3u8End = performance.now();
-          logger.info(`[PERF] M3U8 resolution for ${searchResult.source_name}: ${(m3u8End - m3u8Start).toFixed(2)}ms (${resolution || 'failed'})`);
-          return { ...searchResult, resolution };
-        })
-      );
-      
+            return { ...searchResult, resolution };
+          })
+        );
+        if (signal.aborted) return;
+        resultsWithResolution.push(...batchResults);
+      }
+
       const resolutionEnd = performance.now();
       logger.info(`[PERF] Resolution detection COMPLETE - took ${(resolutionEnd - resolutionStart).toFixed(2)}ms`);
 

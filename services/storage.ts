@@ -52,6 +52,10 @@ export interface LoginCredentials {
 const generateKey = (source: string, id: string) => `${source}+${id}`;
 
 // --- PlayerSettingsManager (Uses AsyncStorage) ---
+// 容量上限：无界增长会让 AsyncStorage 的单条 JSON 越来越大，
+// 每次播放的全量 parse/stringify 开销也随之增长；200 个视频足够覆盖常用场景
+const MAX_PLAYER_SETTINGS_ENTRIES = 200;
+
 export class PlayerSettingsManager {
   static async getAll(): Promise<Record<string, PlayerSettings>> {
     try {
@@ -82,6 +86,11 @@ export class PlayerSettingsManager {
     // Only save if there are actual values to save
     if (settings.introEndTime !== undefined || settings.outroStartTime !== undefined || settings.playbackRate !== undefined) {
       allSettings[key] = { ...allSettings[key], ...settings };
+      // 超限时淘汰最旧写入的条目（对象键序即插入序）
+      const keys = Object.keys(allSettings);
+      if (keys.length > MAX_PLAYER_SETTINGS_ENTRIES) {
+        delete allSettings[keys[0]];
+      }
     } else {
       // If all are undefined, remove the key
       delete allSettings[key];

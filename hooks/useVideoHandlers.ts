@@ -177,6 +177,8 @@ export const useVideoHandlers = ({
     posterSource: { uri: detail?.poster ?? "" },
     resizeMode: ResizeMode.CONTAIN,
     rate: playbackRate,
+    // 默认 500ms 一帧 status 会全量重渲染播放页订阅者，1 秒足够进度条展示
+    progressUpdateIntervalMillis: 1000,
     onPlaybackStatusUpdate: handlePlaybackStatusUpdate,
     onLoad,
     onLoadStart,

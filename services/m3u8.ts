@@ -9,6 +9,8 @@ interface CacheEntry {
 
 const resolutionCache: { [url: string]: CacheEntry } = {};
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+// 缓存条目上限：防止长时间使用后 URL 键无限累积（无界缓存泄漏）
+const MAX_CACHE_ENTRIES = 200;
 
 export const getResolutionFromM3U8 = async (
   url: string,
@@ -19,10 +21,14 @@ export const getResolutionFromM3U8 = async (
   
   // 1. Check cache first
   const cachedEntry = resolutionCache[url];
-  if (cachedEntry && Date.now() - cachedEntry.timestamp < CACHE_DURATION) {
-    const perfEnd = performance.now();
-    logger.info(`[PERF] M3U8 resolution detection CACHED - took ${(perfEnd - perfStart).toFixed(2)}ms, resolution: ${cachedEntry.resolution}`);
-    return cachedEntry.resolution;
+  if (cachedEntry) {
+    if (Date.now() - cachedEntry.timestamp < CACHE_DURATION) {
+      const perfEnd = performance.now();
+      logger.info(`[PERF] M3U8 resolution detection CACHED - took ${(perfEnd - perfStart).toFixed(2)}ms, resolution: ${cachedEntry.resolution}`);
+      return cachedEntry.resolution;
+    }
+    // 条目过期：立即删除，不留死键
+    delete resolutionCache[url];
   }
 
   if (!url.toLowerCase().endsWith(".m3u8")) {
@@ -62,7 +68,11 @@ export const getResolutionFromM3U8 = async (
     const parseEnd = performance.now();
     logger.info(`[PERF] M3U8 parsing took ${(parseEnd - parseStart).toFixed(2)}ms, lines: ${lines.length}`);
 
-    // 2. Store result in cache
+    // 2. Store result in cache（超限时淘汰最旧条目，保持有界）
+    if (Object.keys(resolutionCache).length >= MAX_CACHE_ENTRIES) {
+      const oldestKey = Object.keys(resolutionCache)[0];
+      delete resolutionCache[oldestKey];
+    }
     resolutionCache[url] = {
       resolution: resolutionString,
       timestamp: Date.now(),

@@ -58,6 +58,10 @@ export default function SearchScreen() {
   //   return () => clearTimeout(timer);
   // }, []);
 
+  // 并发去重：连按搜索/遥控输入时中止上一轮请求，避免多轮全源搜索
+  // 并发堆积与响应乱序覆盖（上一个慢响应会覆盖新结果）
+  const searchAbortRef = useRef<AbortController | null>(null);
+
   const handleSearch = async (searchText?: string) => {
     const term = typeof searchText === "string" ? searchText : keyword;
     if (!term.trim()) {
@@ -67,20 +71,37 @@ export default function SearchScreen() {
     Keyboard.dismiss();
     setLoading(true);
     setError(null);
+
+    // 中止上一轮搜索
+    searchAbortRef.current?.abort();
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+
     try {
-      const response = await api.searchVideos(term);
+      const response = await api.searchVideos(term, controller.signal);
+      if (controller.signal.aborted) return;
       if (response.results.length > 0) {
         setResults(response.results);
       } else {
         setError("没有找到相关内容");
       }
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.name === "AbortError" || controller.signal.aborted) return;
       setError("搜索失败，请稍后重试。");
       logger.info("Search failed:", err);
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) {
+        setLoading(false);
+      }
     }
   };
+
+  // 离开页面时中止在途搜索
+  useEffect(() => {
+    return () => {
+      searchAbortRef.current?.abort();
+    };
+  }, []);
 
   const onSearchPress = () => handleSearch();
 

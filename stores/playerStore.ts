@@ -452,6 +452,10 @@ const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   reset: () => {
+    // 清理未决的 seek 定时器，避免卸载后仍触发状态更新
+    if (get()._seekTimeout) {
+      clearTimeout(get()._seekTimeout);
+    }
     set({
       episodes: [],
       currentEpisodeIndex: 0,
@@ -466,6 +470,9 @@ const usePlayerStore = create<PlayerState>((set, get) => ({
       playbackRate: 1.0,
       introEndTime: undefined,
       outroStartTime: undefined,
+      // 释放对已卸载 <Video> 组件的引用，避免全局 store 持有死组件
+      videoRef: null,
+      _seekTimeout: undefined,
     });
   },
 

@@ -1,5 +1,5 @@
-import React, { useEffect } from "react";
-import { View, Text, StyleSheet, Image, ScrollView, ActivityIndicator } from "react-native";
+import React, { useEffect, useCallback } from "react";
+import { View, Text, StyleSheet, Image, ScrollView, FlatList, ActivityIndicator } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { ThemedView } from "@/components/ThemedView";
 import { ThemedText } from "@/components/ThemedText";
@@ -58,6 +58,30 @@ export default function DetailScreen() {
     });
   };
 
+  // 剧集虚拟化网格：综艺/动画可达数千集，全量挂载会拖垮低内存设备。
+  // 只渲染视口附近的按钮，屏外条目自动卸载。
+  // 注意：以下 Hook 必须位于所有 early return 之前，保证调用顺序稳定。
+  const episodeColumns = deviceType === "mobile" ? 4 : 8;
+
+  const episodeKeyExtractor = useCallback((_: string, index: number) => String(index), []);
+
+  // 动态样式
+  const dynamicStyles = createResponsiveStyles(deviceType, spacing);
+
+  const renderEpisode = useCallback(
+    ({ index }: { item: string; index: number }) => (
+      <StyledButton
+        style={dynamicStyles.episodeButton}
+        onPress={() => handlePlay(index)}
+        text={`第 ${index + 1} 集`}
+        textStyle={dynamicStyles.episodeButtonText}
+      />
+    ),
+    // handlePlay 依赖 detail（每次导航后变化），依赖 detail.episodes 即可覆盖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [detail?.episodes, dynamicStyles.episodeButton, dynamicStyles.episodeButtonText]
+  );
+
   if (loading) {
     return <VideoLoadingAnimation showProgressBar={false} />;
   }
@@ -102,9 +126,6 @@ export default function DetailScreen() {
     );
   }
 
-  // 动态样式
-  const dynamicStyles = createResponsiveStyles(deviceType, spacing);
-
   const renderDetailContent = () => {
     if (deviceType === 'mobile') {
       // 移动端垂直布局
@@ -112,7 +133,7 @@ export default function DetailScreen() {
         <ScrollView style={dynamicStyles.scrollContainer}>
           {/* 海报和基本信息 */}
           <View style={dynamicStyles.mobileTopContainer}>
-            <Image source={{ uri: detail.poster }} style={dynamicStyles.mobilePoster} />
+            <Image source={{ uri: detail.poster }} style={dynamicStyles.mobilePoster} resizeMethod="resize" />
             <View style={dynamicStyles.mobileInfoContainer}>
               <View style={dynamicStyles.titleContainer}>
                 <ThemedText style={dynamicStyles.title} numberOfLines={2}>
@@ -176,17 +197,20 @@ export default function DetailScreen() {
           {/* 剧集列表 */}
           <View style={dynamicStyles.episodesContainer}>
             <ThemedText style={dynamicStyles.episodesTitle}>播放列表</ThemedText>
-            <View style={dynamicStyles.episodeList}>
-              {detail.episodes.map((episode, index) => (
-                <StyledButton
-                  key={index}
-                  style={dynamicStyles.episodeButton}
-                  onPress={() => handlePlay(index)}
-                  text={`第 ${index + 1} 集`}
-                  textStyle={dynamicStyles.episodeButtonText}
-                />
-              ))}
-            </View>
+            <FlatList
+              key={`episode-grid-${episodeColumns}`}
+              data={detail.episodes}
+              renderItem={renderEpisode}
+              keyExtractor={episodeKeyExtractor}
+              numColumns={episodeColumns}
+              nestedScrollEnabled
+              style={dynamicStyles.episodeGrid}
+              contentContainerStyle={dynamicStyles.episodeList}
+              showsVerticalScrollIndicator={false}
+              initialNumToRender={episodeColumns * 5}
+              maxToRenderPerBatch={episodeColumns * 2}
+              windowSize={5}
+            />
           </View>
         </ScrollView>
       );
@@ -195,7 +219,7 @@ export default function DetailScreen() {
       return (
         <ScrollView style={dynamicStyles.scrollContainer}>
           <View style={dynamicStyles.topContainer}>
-            <Image source={{ uri: detail.poster }} style={dynamicStyles.poster} />
+            <Image source={{ uri: detail.poster }} style={dynamicStyles.poster} resizeMethod="resize" />
             <View style={dynamicStyles.infoContainer}>
               <View style={dynamicStyles.titleContainer}>
                 <ThemedText style={dynamicStyles.title} numberOfLines={1} ellipsizeMode="tail">
@@ -257,17 +281,20 @@ export default function DetailScreen() {
             </View>
             <View style={dynamicStyles.episodesContainer}>
               <ThemedText style={dynamicStyles.episodesTitle}>播放列表</ThemedText>
-              <ScrollView contentContainerStyle={dynamicStyles.episodeList}>
-                {detail.episodes.map((episode, index) => (
-                  <StyledButton
-                    key={index}
-                    style={dynamicStyles.episodeButton}
-                    onPress={() => handlePlay(index)}
-                    text={`第 ${index + 1} 集`}
-                    textStyle={dynamicStyles.episodeButtonText}
-                  />
-                ))}
-              </ScrollView>
+              <FlatList
+                key={`episode-grid-${episodeColumns}`}
+                data={detail.episodes}
+                renderItem={renderEpisode}
+                keyExtractor={episodeKeyExtractor}
+                numColumns={episodeColumns}
+                nestedScrollEnabled
+                style={dynamicStyles.episodeGrid}
+                contentContainerStyle={dynamicStyles.episodeList}
+                showsVerticalScrollIndicator={false}
+                initialNumToRender={episodeColumns * 5}
+                maxToRenderPerBatch={episodeColumns * 2}
+                windowSize={5}
+              />
             </View>
           </View>
         </ScrollView>
@@ -437,9 +464,16 @@ const createResponsiveStyles = (deviceType: string, spacing: number) => {
       flexDirection: "row",
       flexWrap: "wrap",
     },
+    episodeGrid: {
+      // 限制内层列表高度，配合 nestedScrollEnabled 独立滚动，
+      // 避免数千集全量撑开页面
+      maxHeight: isMobile ? 240 : 300,
+    },
     episodeButton: {
       margin: isMobile ? 3 : 5,
       minHeight: isMobile ? 32 : 36,
+      // 固定宽度以适配 FlatList numColumns 网格
+      width: isMobile ? 82 : 112,
     },
     episodeButtonText: {
       color: "white",

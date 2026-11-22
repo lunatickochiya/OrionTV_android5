@@ -67,6 +67,16 @@ export default function LiveScreen() {
     titleTimer.current = setTimeout(() => setChannelTitle(null), 3000);
   };
 
+  // 卸载时清理标题定时器，避免离开直播页后仍触发状态更新
+  useEffect(() => {
+    return () => {
+      if (titleTimer.current) {
+        clearTimeout(titleTimer.current);
+        titleTimer.current = null;
+      }
+    };
+  }, []);
+
   const handleSelectChannel = (channel: Channel) => {
     const globalIndex = channels.findIndex((c) => c.id === channel.id);
     if (globalIndex !== -1) {

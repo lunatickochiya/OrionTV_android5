@@ -150,7 +150,12 @@ const VideoCardTablet = forwardRef<View, VideoCardTabletProps>(
           delayLongPress={900}
         >
           <View style={[styles.card, isPressed && styles.cardPressed]}>
-            <Image source={{ uri: api.getImageProxyUrl(poster) }} style={styles.poster} />
+            {/* resizeMethod="resize"：Android 下直接按视图尺寸解码，避免全尺寸海报位图驻留内存 */}
+            <Image
+              source={{ uri: api.getImageProxyUrl(poster) }}
+              style={styles.poster}
+              resizeMethod="resize"
+            />
             
             {/* 悬停效果遮罩 */}
             {isPressed && (

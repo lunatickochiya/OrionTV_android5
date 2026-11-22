@@ -10,6 +10,10 @@ export interface Channel {
   group: string;
 }
 
+// 解析结果缓存（URL → 频道列表），避免重复下载/解析大 M3U
+const M3U_CACHE_TTL = 10 * 60 * 1000; // 10 分钟
+const m3uCache = new Map<string, { channels: Channel[]; timestamp: number }>();
+
 export const parseM3U = (m3uText: string): Channel[] => {
   const parsedChannels: Channel[] = [];
   const lines = m3uText.split('\n');
@@ -55,13 +59,22 @@ export const parseM3U = (m3uText: string): Channel[] => {
 };
 
 export const fetchAndParseM3u = async (m3uUrl: string): Promise<Channel[]> => {
+  // 模块级缓存：IPTV 列表常见数 MB/上万条，每次进直播页都重新下载+解析
+  // 会产生大字符串内存尖峰并浪费时间；TTL 内复用解析结果
+  const cached = m3uCache.get(m3uUrl);
+  if (cached && Date.now() - cached.timestamp < M3U_CACHE_TTL) {
+    return cached.channels;
+  }
+
   try {
     const response = await fetch(m3uUrl);
     if (!response.ok) {
       throw new Error(`Failed to fetch M3U: ${response.statusText}`);
     }
     const m3uText = await response.text();
-    return parseM3U(m3uText);
+    const channels = parseM3U(m3uText);
+    m3uCache.set(m3uUrl, { channels, timestamp: Date.now() });
+    return channels;
   } catch (error) {
     logger.info("Error fetching or parsing M3U:", error);
     return []; // Return empty array on error

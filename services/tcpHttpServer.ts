@@ -232,6 +232,25 @@ class TCPHttpServer {
                   this.setSocketTimeout(socket);
 
                   requestData += data.toString();
+
+                  // 增量上限检查：超限时立即断开，避免恶意/异常请求
+                  // 在 parseHttpRequest（收完才查）之前无限累积占内存
+                  if (requestData.length > MAX_REQUEST_SIZE) {
+                    logger.warn('[TCPHttpServer] Request exceeds size limit, closing socket');
+                    const errorResponse = this.formatHttpResponse({
+                      statusCode: 413,
+                      headers: { 'Content-Type': 'text/plain' },
+                      body: 'Payload Too Large'
+                    });
+                    try {
+                      socket.write(errorResponse);
+                    } catch (writeError) {
+                      logger.warn('[TCPHttpServer] Error writing 413 response:', writeError);
+                    }
+                    socket.end();
+                    requestData = '';
+                    return;
+                  }
                   
                   // 检查是否有完整的 HTTP 请求
                   if (requestData.includes('\r\n\r\n')) {

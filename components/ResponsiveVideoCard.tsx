@@ -211,7 +211,12 @@ const ResponsiveVideoCard = forwardRef<View, VideoCardProps>(
           delayLongPress={responsiveConfig.deviceType === 'mobile' ? 500 : 1000}
         >
           <View style={dynamicStyles.card}>
-            <Image source={{ uri: api.getImageProxyUrl(poster) }} style={styles.poster} />
+            {/* resizeMethod="resize"：Android 下直接按视图尺寸解码，避免全尺寸海报位图驻留内存 */}
+            <Image
+              source={{ uri: api.getImageProxyUrl(poster) }}
+              style={styles.poster}
+              resizeMethod="resize"
+            />
             {(isFocused && responsiveConfig.deviceType === 'tv') && (
               <View style={dynamicStyles.overlay}>
                 {isContinueWatching && (

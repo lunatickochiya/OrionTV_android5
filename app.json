@@ -48,7 +48,7 @@
     "icon": "./assets/images/icon.png",
     "userInterfaceStyle": "dark",
     "assetBundlePatterns": [
-      "**/*"
+      "assets/**/*"
     ],
     "android": {
       "package": "com.oriontv",

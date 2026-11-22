@@ -66,6 +66,9 @@ interface CacheItem {
 const CACHE_EXPIRE_TIME = 5 * 60 * 1000; // 5分钟过期
 const MAX_CACHE_SIZE = 10; // 最大缓存容量
 const MAX_ITEMS_PER_CACHE = 40; // 每个缓存最大条目数
+// contentData 累积上限：无限翻页会让列表数据（连同每条的图片 URL）持续增长，
+// 在低内存设备上配合虚拟化列表，600 条（约 37 页豆瓣数据）足够使用且可控
+const MAX_CONTENT_ITEMS = 600;
 
 const getCacheKey = (category: Category) => {
   return `${category.type || 'unknown'}-${category.title}-${category.tag || ''}`;
@@ -238,7 +241,10 @@ const useHomeStore = create<HomeState>((set, get) => ({
           set((state) => ({
             contentData: [...state.contentData, ...newItems],
             pageStart: state.pageStart + newItems.length,
-            hasMore: result.list.length !== 0,
+            // 达到累积上限后停止继续翻页，避免低内存设备 OOM
+            hasMore:
+              result.list.length !== 0 &&
+              state.contentData.length + newItems.length < MAX_CONTENT_ITEMS,
           }));
         }
       } else if (selectedCategory.tags) {
