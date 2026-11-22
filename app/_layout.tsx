@@ -19,6 +19,42 @@ import Logger from '@/utils/Logger';
 
 const logger = Logger.withTag('RootLayout');
 
+// Android 5 + Hermes 引擎缺少 TextEncoder，
+// react-native-qrcode-svg 生成二维码时依赖它做 UTF-8 编码，
+// 缺失会在打开二维码弹窗时抛 "ReferenceError: Property 'TextEncoder'
+// doesn't exist" 导致 JS FATAL 崩溃退出。补一个最小实现。
+if (typeof (global as any).TextEncoder === 'undefined') {
+  (global as any).TextEncoder = class TextEncoder {
+    readonly encoding = 'utf-8';
+    encode(str: string): Uint8Array {
+      const utf8: number[] = [];
+      for (let i = 0; i < str.length; i++) {
+        let codePoint = str.codePointAt(i)!;
+        if (codePoint > 0xffff) i++; // 代理对占用两个 code unit
+        if (codePoint < 0x80) {
+          utf8.push(codePoint);
+        } else if (codePoint < 0x800) {
+          utf8.push(0xc0 | (codePoint >> 6), 0x80 | (codePoint & 0x3f));
+        } else if (codePoint < 0x10000) {
+          utf8.push(
+            0xe0 | (codePoint >> 12),
+            0x80 | ((codePoint >> 6) & 0x3f),
+            0x80 | (codePoint & 0x3f)
+          );
+        } else {
+          utf8.push(
+            0xf0 | (codePoint >> 18),
+            0x80 | ((codePoint >> 12) & 0x3f),
+            0x80 | ((codePoint >> 6) & 0x3f),
+            0x80 | (codePoint & 0x3f)
+          );
+        }
+      }
+      return new Uint8Array(utf8);
+    }
+  };
+}
+
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
 

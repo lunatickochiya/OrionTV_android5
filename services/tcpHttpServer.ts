@@ -30,6 +30,8 @@ class TCPHttpServer {
   private requestHandler: RequestHandler | null = null;
   private sockets = new Set<TcpSocket.Socket>();
   private requestTimeouts = new Map<TcpSocket.Socket, NodeJS.Timeout>();
+  // 绑定具体 IP 失败后已尝试过 0.0.0.0 回退的标记
+  private fallbackTried = false;
 
   constructor() {
     this.server = null;
@@ -118,6 +120,121 @@ class TCPHttpServer {
       logger.error('[TCPHttpServer] Error formatting response:', error);
       // 返回一个基本的错误响应
       return 'HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n';
+    }
+  }
+
+  /**
+   * 单个连接的完整处理逻辑（监听回调复用）：
+   * 超时管理 → 增量大小限制 → 解析 HTTP → 处理 → 响应 → 关闭
+   */
+  private handleConnection(socket: TcpSocket.Socket) {
+    try {
+      logger.debug('[TCPHttpServer] Client connected');
+      this.sockets.add(socket);
+      this.setSocketTimeout(socket);
+
+      let requestData = '';
+
+      socket.on('data', async (data: string | Buffer) => {
+        try {
+          // 清除之前的超时，重新设置
+          this.setSocketTimeout(socket);
+
+          requestData += data.toString();
+
+          // 增量上限检查：超限时立即断开，避免恶意/异常请求
+          // 在 parseHttpRequest（收完才查）之前无限累积占内存
+          if (requestData.length > MAX_REQUEST_SIZE) {
+            logger.warn('[TCPHttpServer] Request exceeds size limit, closing socket');
+            const errorResponse = this.formatHttpResponse({
+              statusCode: 413,
+              headers: { 'Content-Type': 'text/plain' },
+              body: 'Payload Too Large'
+            });
+            try {
+              socket.write(errorResponse);
+            } catch (writeError) {
+              logger.warn('[TCPHttpServer] Error writing 413 response:', writeError);
+            }
+            socket.end();
+            requestData = '';
+            return;
+          }
+
+          // 检查是否有完整的 HTTP 请求
+          if (requestData.includes('\r\n\r\n')) {
+            try {
+              const request = this.parseHttpRequest(requestData);
+              if (request && this.requestHandler) {
+                try {
+                  const response = await this.requestHandler(request);
+                  const httpResponse = this.formatHttpResponse(response);
+                  socket.write(httpResponse);
+                } catch (handlerError) {
+                  logger.warn('[TCPHttpServer] Request handler error:', handlerError);
+                  const errorResponse = this.formatHttpResponse({
+                    statusCode: 500,
+                    headers: { 'Content-Type': 'text/plain' },
+                    body: 'Internal Server Error'
+                  });
+                  socket.write(errorResponse);
+                }
+              } else {
+                const errorResponse = this.formatHttpResponse({
+                  statusCode: 400,
+                  headers: { 'Content-Type': 'text/plain' },
+                  body: 'Bad Request'
+                });
+                socket.write(errorResponse);
+              }
+            } catch (parseError) {
+              logger.warn('[TCPHttpServer] Error processing request:', parseError);
+              const errorResponse = this.formatHttpResponse({
+                statusCode: 500,
+                headers: { 'Content-Type': 'text/plain' },
+                body: 'Internal Server Error'
+              });
+              try {
+                socket.write(errorResponse);
+              } catch (writeError) {
+                logger.warn('[TCPHttpServer] Error writing error response:', writeError);
+              }
+            }
+
+            try {
+              socket.end();
+            } catch (endError) {
+              logger.warn('[TCPHttpServer] Error ending socket:', endError);
+            }
+            requestData = '';
+          }
+        } catch (dataError) {
+          logger.warn('[TCPHttpServer] Error handling socket data:', dataError);
+          try {
+            socket.end();
+          } catch (e) {
+            logger.warn('[TCPHttpServer] Error closing socket after data error:', e);
+          }
+        }
+      });
+
+      socket.on('error', (error: Error) => {
+        logger.warn('[TCPHttpServer] Socket error:', error);
+        this.cleanupSocket(socket);
+      });
+
+      socket.on('close', () => {
+        logger.debug('[TCPHttpServer] Client disconnected');
+        this.cleanupSocket(socket);
+      });
+    } catch (socketError) {
+      logger.error('[TCPHttpServer] Error setting up socket:', socketError);
+      try {
+        socket.end();
+      } catch (e) {
+        logger.warn('[TCPHttpServer] Error closing socket after setup error:', e);
+      }
+      this.cleanupSocket(socket);
     }
   }
 
@@ -214,120 +331,21 @@ class TCPHttpServer {
         return `http://${ipAddress}:${PORT}`;
       }
 
+      if (!ipAddress) {
+        throw new Error('无法获取设备IP地址');
+      }
+
       return new Promise((resolve, reject) => {
         try {
           this.server = TcpSocket.createServer((socket: TcpSocket.Socket) => {
-            try {
-              logger.debug('[TCPHttpServer] Client connected');
-              this.sockets.add(socket);
-              this.setSocketTimeout(socket);
-              
-              let requestData = '';
-              
-              socket.on('data', async (data: string | Buffer) => {
-                try {
-                  // 清除之前的超时，重新设置
-                  this.setSocketTimeout(socket);
-
-                  requestData += data.toString();
-
-                  // 增量上限检查：超限时立即断开，避免恶意/异常请求
-                  // 在 parseHttpRequest（收完才查）之前无限累积占内存
-                  if (requestData.length > MAX_REQUEST_SIZE) {
-                    logger.warn('[TCPHttpServer] Request exceeds size limit, closing socket');
-                    const errorResponse = this.formatHttpResponse({
-                      statusCode: 413,
-                      headers: { 'Content-Type': 'text/plain' },
-                      body: 'Payload Too Large'
-                    });
-                    try {
-                      socket.write(errorResponse);
-                    } catch (writeError) {
-                      logger.warn('[TCPHttpServer] Error writing 413 response:', writeError);
-                    }
-                    socket.end();
-                    requestData = '';
-                    return;
-                  }
-                  
-                  // 检查是否有完整的 HTTP 请求
-                  if (requestData.includes('\r\n\r\n')) {
-                    try {
-                      const request = this.parseHttpRequest(requestData);
-                      if (request && this.requestHandler) {
-                        try {
-                          const response = await this.requestHandler(request);
-                          const httpResponse = this.formatHttpResponse(response);
-                          socket.write(httpResponse);
-                        } catch (handlerError) {
-                          logger.warn('[TCPHttpServer] Request handler error:', handlerError);
-                          const errorResponse = this.formatHttpResponse({
-                            statusCode: 500,
-                            headers: { 'Content-Type': 'text/plain' },
-                            body: 'Internal Server Error'
-                          });
-                          socket.write(errorResponse);
-                        }
-                      } else {
-                        const errorResponse = this.formatHttpResponse({
-                          statusCode: 400,
-                          headers: { 'Content-Type': 'text/plain' },
-                          body: 'Bad Request'
-                        });
-                        socket.write(errorResponse);
-                      }
-                    } catch (parseError) {
-                      logger.warn('[TCPHttpServer] Error processing request:', parseError);
-                      const errorResponse = this.formatHttpResponse({
-                        statusCode: 500,
-                        headers: { 'Content-Type': 'text/plain' },
-                        body: 'Internal Server Error'
-                      });
-                      try {
-                        socket.write(errorResponse);
-                      } catch (writeError) {
-                        logger.warn('[TCPHttpServer] Error writing error response:', writeError);
-                      }
-                    }
-                    
-                    try {
-                      socket.end();
-                    } catch (endError) {
-                      logger.warn('[TCPHttpServer] Error ending socket:', endError);
-                    }
-                    requestData = '';
-                  }
-                } catch (dataError) {
-                  logger.warn('[TCPHttpServer] Error handling socket data:', dataError);
-                  try {
-                    socket.end();
-                  } catch (e) {
-                    logger.warn('[TCPHttpServer] Error closing socket after data error:', e);
-                  }
-                }
-              });
-
-              socket.on('error', (error: Error) => {
-                logger.warn('[TCPHttpServer] Socket error:', error);
-                this.cleanupSocket(socket);
-              });
-
-              socket.on('close', () => {
-                logger.debug('[TCPHttpServer] Client disconnected');
-                this.cleanupSocket(socket);
-              });
-            } catch (socketError) {
-              logger.error('[TCPHttpServer] Error setting up socket:', socketError);
-              try {
-                socket.end();
-              } catch (e) {
-                logger.warn('[TCPHttpServer] Error closing socket after setup error:', e);
-              }
-              this.cleanupSocket(socket);
-            }
+            this.handleConnection(socket);
           });
 
-          this.server.listen({ port: PORT, host: '0.0.0.0' }, () => {
+          // 绑定具体 IPv4 地址：部分 Android 5 设备上监听 '0.0.0.0' 实际落在
+          // IPv6 any(::)（见 /proc/net/tcp6），IPv4 客户端连接无任何响应，
+          // 手机扫码访问 http://<设备IP>:12346 会一直空白。
+          // 绑定 getLocalIPAddress() 返回的具体地址可确保 IPv4 可达。
+          this.server.listen({ port: PORT, host: ipAddress }, () => {
             logger.info(`[TCPHttpServer] Server listening on ${ipAddress}:${PORT}`);
             this.isRunning = true;
             resolve(`http://${ipAddress}:${PORT}`);
@@ -335,8 +353,31 @@ class TCPHttpServer {
 
           this.server.on('error', (error: Error) => {
             logger.error('[TCPHttpServer] Server error:', error);
-            this.isRunning = false;
             this.cleanup();
+            // 绑定具体 IP 失败（如 DHCP 换地址瞬间）时回退到通配地址
+            if (!this.isRunning && !this.fallbackTried) {
+              this.fallbackTried = true;
+              logger.warn('[TCPHttpServer] Bind to specific IP failed, falling back to 0.0.0.0');
+              try {
+                this.server = TcpSocket.createServer((socket: TcpSocket.Socket) => {
+                  this.handleConnection(socket);
+                });
+                this.server.listen({ port: PORT, host: '0.0.0.0' }, () => {
+                  this.isRunning = true;
+                  logger.info(`[TCPHttpServer] Server fallback listening on 0.0.0.0:${PORT}`);
+                  resolve(`http://${ipAddress}:${PORT}`);
+                });
+                this.server.on('error', (fallbackError: Error) => {
+                  logger.error('[TCPHttpServer] Fallback server error:', fallbackError);
+                  this.isRunning = false;
+                  reject(fallbackError);
+                });
+              } catch (fallbackError) {
+                reject(fallbackError);
+              }
+              return;
+            }
+            this.isRunning = false;
             reject(error);
           });
 
@@ -355,6 +396,8 @@ class TCPHttpServer {
   public stop() {
     try {
       this.cleanup();
+      // 下次 start 重新允许 IP 绑定回退
+      this.fallbackTried = false;
       logger.debug('[TCPHttpServer] Server stopped');
     } catch (error) {
       logger.warn('[TCPHttpServer] Error stopping server:', error);
